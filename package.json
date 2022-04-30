@@ -1,0 +1,29 @@
+{
+	"name": "betterpip",
+	"version": "1.0.0",
+	"description": "Comme Pip, mais en mieux",
+	"main": "index.js",
+	"bin": {
+		"betterpip": "index.js",
+		"bpip": "index.js"
+	},
+	"keywords": [
+		"python",
+		"module",
+		"pip"
+	],
+	"author": "JohanStickman",
+	"license": "MIT",
+	"dependencies": {
+		"chalk": "^4.1.2",
+		"inquirer": "^8.2.0",
+		"lookpath": "^1.2.2",
+		"node-fetch": "^2.6.1",
+		"ora": "^5.4.1",
+		"regedit": "^5.0.0"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/johan-perso/betterpip.git"
+	}
+}
