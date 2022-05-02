@@ -21,9 +21,10 @@ $ (sudo) npm install --global betterpip
 
 **Installation automatique :**
 
-*script permettant d'installer NodeJS, npm, python et git automatiquement*
+*script permettant d'installer NodeJS/npm, python/pip et git automatiquement*
 
-Soon 👀
+* [Windows](https://github.com/johan-perso/betterpip/blob/main/installation_script/windows.cmd)
+* [Unix](https://github.com/johan-perso/betterpip/blob/main/installation_script/unix.sh) : `curl -sL https://raw.githubusercontent.com/johan-perso/betterpip/main/installation_script/unix.sh | bash`
 
 
 ## Pourquoi ?
