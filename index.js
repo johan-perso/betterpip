@@ -41,8 +41,8 @@ async function createPackage(){
 			name: 'mainFile',
 			message: 'Chemin du fichier principal',
 			validate: function(value){
-				// Si y'a aucune valeur
-				if(!value) return 'Aucune valeur';
+				// Si y'a aucune valeur, on s'en fout du reste :)
+				if(!value) return true;
 
 				// Vérifier si le fichier existe
 				if(!fs.existsSync(path.join(value))){
@@ -65,6 +65,9 @@ async function createPackage(){
 			validate: function(value){
 				// Diviser par chaque virgule
 				var commands = value.split(',')
+				
+				// Si il n'y a aucun élement, on arrête les vérifications d'après
+				if(!commands.length || (commands.length == 1 && commands[0] == '')) return true
 
 				// Vérifier chaque commande
 				for(var i = 0; i < commands.length; i++){
@@ -90,13 +93,17 @@ async function createPackage(){
 		}
 	])
 
+	// Avoir une meilleure liste des commandes globales
+	var globalCommands = answers.globalCommands.split(',')
+	if(!globalCommands.length || (globalCommands.length == 1 && globalCommands[0] == '')) globalCommands = null
+
 	// Créer le package
 	var package = {
-		name: answers.name,
-		description: answers.description,
-		author: answers.author,
-		mainFile: path.join(answers.mainFile).replace(path.join(process.cwd(), './'), ''),
-		globalCommands: answers.globalCommands.split(',') || []
+		name: answers.name || undefined,
+		description: answers.description || undefined,
+		author: answers.author || undefined,
+		mainFile: path.join(answers.mainFile).replace(path.join(process.cwd(), './'), '') || undefined,
+		globalCommands: globalCommands || undefined
 	}
 
 	// Créer le fichier python-package.json
