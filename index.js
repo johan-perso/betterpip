@@ -1,109 +1,164 @@
 #!/usr/bin/env node
 
+// Lazy Load Modules
+var _require = require;
+var require = function (moduleName) {
+    var module;
+    return new Proxy(function () {
+        if (!module) {
+            module = _require(moduleName)
+        }
+        return module.apply(this, arguments)
+    }, {
+        get: function (target, name) {
+            if (!module) {
+                module = _require(moduleName)
+            }
+            return module[name];
+        }
+    })
+};
+
 // Importer quelques librairies
 const chalk = require('chalk');
+const boxen = require('boxen');
 const inquirer = require('inquirer');
+const open = require('open');
 const fs = require('fs');
 const path = require('path');
-const ora = require('ora'); var spinner = ora({ spinner: 'line' });
+const ora = require('ora'); var spinner = ora();
+
+// Obtenir le nom des commandes à utiliser
+var pythonCommand;
+var pipCommand = (process?.env?.BETTERPIP_PIP_COMMAND?.length) ? process.env.BETTERPIP_PIP_COMMAND : "pip"
+
+// Système de mise à jour
+const pkg = require('./package.json')
+const notifier = require('update-notifier')({ pkg, updateCheckInterval: 10 })
+if(!process.env.BETTERPIP_SILENT_OUTPUT && notifier.update && pkg.version !== notifier.update.latest){
+	console.log(boxen("Mise à jour disponible " + chalk.dim(pkg.version) + chalk.reset(" → ") + chalk.green(notifier.update.latest) + "\n" + chalk.cyan("npm i -g " + pkg.name) + " pour mettre à jour", {
+		padding: 1,
+		margin: 1,
+		align: 'center',
+		borderColor: 'yellow',
+		borderStyle: 'round'
+	}))
+}
 
 // Fonction pour afficher un assistant de création de package
 async function createPackage(){
-	// Afficher une aide
-	console.log(`Cet assistant vous permet de générer un fichier "python-package.json" pour ce projet.\nToutes les valeurs sont facultatives à l'exception du fichier principale.\n`)
+	// Préparer la liste des informations à inclure dans le package
+	var answers = {}
 
-	// Poser des questions avec Inquirer
-	var answers = await inquirer.prompt([
-		{
-			type: 'input',
-			name: 'name',
-			message: 'Nom',
-			default: path.basename(process.cwd())
-		},
-		{
-			type: 'input',
-			name: 'description',
-			message: 'Description'
-		},
-		{
-			type: 'input',
-			name: 'author',
-			message: 'Auteur',
-			validate: function(value){
-				if(value.length > 48){
-					return 'Veuillez entrer un nom de moins de 48 caractères';
+	// Si l'argument -y est présent
+	if(process.argv.includes('-y') || process.env.BETTERPIP_DEFAULT_VALUE_FOR_INIT || process.env.BETTERPIP_SILENT_OUTPUT){
+		answers.name = path.basename(process.cwd())
+		answers.description = ""
+		answers.author = require('os').userInfo().username
+		answers.globalCommands = []
+		if(!answers.mainFile && fs.existsSync(path.join(process.cwd(), '__init__.py'))) answers.mainFile = '__init.py'
+		if(!answers.mainFile && fs.existsSync(path.join(process.cwd(), 'app.py'))) answers.mainFile = 'app.py'
+		if(!answers.mainFile && fs.existsSync(path.join(process.cwd(), 'main.py'))) answers.mainFile = 'main.py'
+		if(!answers.mainFile && fs.existsSync(path.join(process.cwd(), 'index.py'))) answers.mainFile = 'index.py'
+		if(!answers.mainFile) answers.mainFile = fs.readdirSync(process.cwd()).find(file => file.endsWith('.py'))
+		if(!answers.mainFile) answers.mainFile = "" // Si on a trouvé aucun fichier, on en met pas
+	} else { // Sinon, demander les informations à l'utilisateur
+		// Afficher une aide
+		console.log(`Cet assistant vous permet de générer un fichier "python-package.json" pour ce projet.\nToutes les valeurs sont facultatives à l'exception du fichier principale.\n`)
+
+		// Poser des questions avec Inquirer
+		answers = await inquirer.prompt([
+			{
+				type: 'input',
+				name: 'name',
+				message: 'Nom',
+				default: path.basename(process.cwd())
+			},
+			{
+				type: 'input',
+				name: 'description',
+				message: 'Description'
+			},
+			{
+				type: 'input',
+				name: 'author',
+				message: 'Auteur',
+				validate: function(value){
+					if(value.length > 48){
+						return 'Veuillez entrer un nom de moins de 48 caractères';
+					}
+					return true;
 				}
-				return true;
+			},
+			{
+				type: 'input',
+				name: 'mainFile',
+				message: 'Chemin du fichier principal',
+				validate: function(value){
+					// Si y'a aucune valeur, on s'en fout du reste :)
+					if(!value) return true;
+
+					// Vérifier si le fichier existe
+					if(!fs.existsSync(path.join(value))){
+						return `Le fichier "${value}" n'existe pas`;
+					}
+
+					// Vérifier si le fichier est un fichier python
+					if(path.extname(value) != '.py'){
+						return 'Le fichier n\'est pas un fichier python';
+					}
+
+					// Sinon bah niquel
+					return true;
+				}
+			},
+			{
+				type: 'input',
+				name: 'globalCommands',
+				message: 'Commandes globales pour lancer le script',
+				validate: function(value){
+					// Diviser par chaque virgule
+					var commands = value.split(',')
+					
+					// Si il n'y a aucun élement, on arrête les vérifications d'après
+					if(!commands.length || (commands.length == 1 && commands[0] == '')) return true
+
+					// Vérifier chaque commande
+					for(var i = 0; i < commands.length; i++){
+						// Si une commande contient un espace, refuser
+						if(commands[i].includes(' ')) return "Les commandes ne doivent pas contenir d'espace, si vous souhaiter en mettre plusieurs, séparez-les par une virgule"
+
+						// Si une commande contient un caractère non alphanumérique, refuser
+						if(!commands[i].match(/^[a-zA-Z0-9-]+$/)) return "Les commandes ne doivent pas contenir de caractères spéciaux"
+
+						// Si une commande fait parti d'une liste de commande déjà utilisé par la plupart des systèmes
+						if(isCommonCommand(commands[i])) return `La commande "${commands[i]}" est déjà utilisé par certain systèmes`
+
+						// Vérifier que le fichier ne contient pas de caractère non autorisé sur un système Unix
+						if(commands[i].includes('/') || commands[i].includes('\\')) return `La commande "${commands[i]}" contient un caractère non autorisé`
+
+						// Vérifier que le fichier ne contient pas de caractère non autorisé sur un système Windows
+						if(commands[i].includes('*') || commands[i].includes('?') || commands[i].includes('"') || commands[i].includes('<') || commands[i].includes('>') || commands[i].includes('|')) return `La commande "${commands[i]}" contient un caractère non autorisé`
+					}
+
+					// Si tout est ok, retourner true
+					return true
+				}
 			}
-		},
-		{
-			type: 'input',
-			name: 'mainFile',
-			message: 'Chemin du fichier principal',
-			validate: function(value){
-				// Si y'a aucune valeur, on s'en fout du reste :)
-				if(!value) return true;
+		])
 
-				// Vérifier si le fichier existe
-				if(!fs.existsSync(path.join(value))){
-					return `Le fichier "${value}" n'existe pas`;
-				}
-
-				// Vérifier si le fichier est un fichier python
-				if(path.extname(value) != '.py'){
-					return 'Le fichier n\'est pas un fichier python';
-				}
-
-				// Sinon bah niquel
-				return true;
-			}
-		},
-		{
-			type: 'input',
-			name: 'globalCommands',
-			message: 'Commandes globales pour lancer le script',
-			validate: function(value){
-				// Diviser par chaque virgule
-				var commands = value.split(',')
-				
-				// Si il n'y a aucun élement, on arrête les vérifications d'après
-				if(!commands.length || (commands.length == 1 && commands[0] == '')) return true
-
-				// Vérifier chaque commande
-				for(var i = 0; i < commands.length; i++){
-					// Si une commande contient un espace, refuser
-					if(commands[i].includes(' ')) return "Les commandes ne doivent pas contenir d'espace, si vous souhaiter en mettre plusieurs, séparez-les par une virgule"
-
-					// Si une commande contient un caractère non alphanumérique, refuser
-					if(!commands[i].match(/^[a-zA-Z0-9-]+$/)) return "Les commandes ne doivent pas contenir de caractères spéciaux"
-
-					// Si une commande fait parti d'une liste de commande déjà utilisé par la plupart des systèmes
-					if(isCommonCommand(commands[i])) return `La commande "${commands[i]}" est déjà utilisé par certain systèmes`
-
-					// Vérifier que le fichier ne contient pas de caractère non autorisé sur un système Unix
-					if(commands[i].includes('/') || commands[i].includes('\\')) return `La commande "${commands[i]}" contient un caractère non autorisé`
-
-					// Vérifier que le fichier ne contient pas de caractère non autorisé sur un système Windows
-					if(commands[i].includes('*') || commands[i].includes('?') || commands[i].includes('"') || commands[i].includes('<') || commands[i].includes('>') || commands[i].includes('|')) return `La commande "${commands[i]}" contient un caractère non autorisé`
-				}
-
-				// Si tout est ok, retourner true
-				return true
-			}
-		}
-	])
-
-	// Avoir une meilleure liste des commandes globales
-	var globalCommands = answers.globalCommands.split(',')
-	if(!globalCommands.length || (globalCommands.length == 1 && globalCommands[0] == '')) globalCommands = null
+		// Avoir une meilleure liste des commandes globales
+		var globalCommands = answers.globalCommands.split(',')
+		if(!globalCommands.length || (globalCommands.length == 1 && globalCommands[0] == '')) globalCommands = null
+	}
 
 	// Créer le package
 	var package = {
-		name: answers.name || undefined,
-		description: answers.description || undefined,
-		author: answers.author || undefined,
-		mainFile: path.join(answers.mainFile).replace(path.join(process.cwd(), './'), '') || undefined,
-		globalCommands: globalCommands || undefined
+		name: answers.name || "",
+		description: answers.description || "",
+		author: answers.author || "",
+		mainFile: path.join(answers.mainFile || '').replace(path.join(process.cwd(), './'), '') || "",
+		globalCommands: globalCommands || []
 	}
 
 	// Créer le fichier python-package.json
@@ -111,6 +166,9 @@ async function createPackage(){
 
 	// Afficher le résultat
 	console.log(chalk.bold(`\nLe package a été créé avec succès !`) + `\nLes dépendances s'ajouteront quand vous en installerez une depuis BetterPip.`)
+
+	// Ouvrir le fichier si la variable est défini
+	if(process.env.BETTERPIP_OPEN_PACKAGE_AFTER_INIT) open(path.join(process.cwd(), 'python-package.json'))
 }
 
 // Fonction pour vérifier si une commande fait pas parti de la liste des commandes les plus courantes
@@ -141,6 +199,15 @@ async function isCommandExist(command){
 
 // Fonction pour déterminer la commande de python à utiliser (python, python2, python3, etc)
 async function getPythonVersion(){
+	// Si la variable est déjà défini
+	if(pythonCommand) return pythonCommand
+
+	// Si une variable d'environnement est définie
+	if(process?.env?.BETTERPIP_PYTHON_COMMAND?.length){
+		pythonCommand = process.env.BETTERPIP_PYTHON_COMMAND
+		return pythonCommand
+	}
+
 	// Crée une promise
 	return new Promise(async (resolve, reject) => {
 		// Vérifier si python est installé
@@ -166,10 +233,10 @@ async function getPythonVersion(){
 		}
 
 		// Donner la meilleure version
-		if(python3) resolve('python3')
-		else if(python2) resolve('python2')
-		else if(python) resolve('python')
-		else resolve(versions[0])
+		if(python3) pythonCommand = 'python3'
+		else if(python2) pythonCommand = 'python2'
+		else pythonCommand = 'python'
+		return resolve(pythonCommand)
 	})
 }
 
@@ -265,7 +332,7 @@ async function removeCommand(commandName){
 async function installModuleFromPackage(){
 	// Obtenir le package
 	var pythonPackage;
-	try { pythonPackage = require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
+	try { pythonPackage = _require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
 
 	// Vérifier qu'il y a des modules à installer
 	if(!pythonPackage.dependencies) return console.log(chalk.red(`Aucun module n'a été défini dans le fichier package. Pour installer un module par son nom, utiliser la commande comme ceci : `) + chalk.red.bold('betterpip install NomDuModule'))
@@ -334,7 +401,7 @@ async function installCliFromGithub(){
 	if(fs.existsSync(path.join(process.cwd(), 'python-package.json'))){
 		// Obtenir le package
 		var pythonPackage;
-		try { pythonPackage = require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
+		try { pythonPackage = _require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
 
 		// Si il y a des modules à installer, les installer
 		if(pythonPackage.dependencies) await installModuleFromPackage() & console.log('\n')
@@ -350,6 +417,33 @@ async function installModule(moduleName){
 	if(!moduleName) var moduleNames = process.argv.slice(3)
 	else var moduleNames = [moduleName]
 
+	// Si on a qu'un "module", et que c'est un fichier
+	if(moduleNames.length == 1 && fs.existsSync(moduleNames[0])){
+		// Demander si on est sûr de l'installation
+		if(!process.env.BETTERPIP_SILENT_OUTPUT) var askConfirm = await inquirer.prompt([{
+			type: 'confirm',
+			name: 'askConfirm',
+			message: `Voulez-vous installer le fichier ?`,
+			default: false
+		}])
+		if(!askConfirm?.askConfirm && !process.env.BETTERPIP_SILENT_OUTPUT) return process.exit()
+
+		// Utiliser Pip pour installer le fichier
+		var install;
+		try {
+			install = require('child_process').execFileSync(pipCommand, ['install', '-r', moduleNames[0]], { stdio: 'inherit', cwd: path.resolve(process.cwd()) })
+		} catch(e){
+			install = 'failed'
+		}
+
+		// Afficher le résultat
+		if(install == 'failed' || install?.toString()?.includes('ERROR')) return console.log(chalk.bold(`Le fichier n'a pas pu être installé !`))
+		else console.log(chalk.bold(`Le fichier a été installé avec succès !`))
+
+		// Sortir de la fonction
+		return
+	}
+
 	// Si aucun modules, installer à partir du package
 	if(!moduleNames.length) return installModuleFromPackage()
 
@@ -358,7 +452,7 @@ async function installModule(moduleName){
 		// Utiliser Pip pour installer le module
 		var install;
 		try {
-			install = require('child_process').execFileSync(`pip`, ['install', moduleName], { stdio: 'inherit', cwd: path.resolve(process.cwd()) })
+			install = require('child_process').execFileSync(pipCommand, ['install', moduleName], { stdio: 'inherit', cwd: path.resolve(process.cwd()) })
 		} catch(e){
 			install = 'failed'
 		}
@@ -369,7 +463,7 @@ async function installModule(moduleName){
 
 		// Ajouter dans le python-package.json si il n'y est pas
 		var pythonPackage;
-		try { pythonPackage = require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
+		try { pythonPackage = _require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
 		pythonPackage.dependencies = pythonPackage.dependencies || {}
 		if(!moduleName.split('==')[1]) pythonPackage.dependencies[moduleName] = '*'
 		if(moduleName.split('==')[1]) pythonPackage.dependencies[moduleName.split('==')[0]] = moduleName.split('==')[1]
@@ -383,8 +477,35 @@ async function uninstallModule(moduleName){
 	if(!moduleName) var moduleNames = process.argv.slice(3)
 	else var moduleNames = [moduleName]
 
+	// Si on a qu'un "module", et que c'est un fichier
+	if(moduleNames.length == 1 && fs.existsSync(moduleNames[0])){
+		// Demander si on est sûr de l'installation
+		if(!process.env.BETTERPIP_SILENT_OUTPUT) var askConfirm = await inquirer.prompt([{
+			type: 'confirm',
+			name: 'askConfirm',
+			message: `Voulez-vous désinstaller à partir du fichier ?`,
+			default: false
+		}])
+		if(!askConfirm?.askConfirm && !process.env.BETTERPIP_SILENT_OUTPUT) return process.exit()
+
+		// Utiliser Pip pour désinstaller
+		var install;
+		try {
+			install = require('child_process').execFileSync(pipCommand, ['uninstall', '-r', moduleNames[0], '-y'], { stdio: 'inherit', cwd: path.resolve(process.cwd()) })
+		} catch(e){
+			install = 'failed'
+		}
+
+		// Afficher le résultat
+		if(install == 'failed' || install?.toString()?.includes('ERROR')) return console.log(chalk.bold(`Le fichier n'a pas pu être installé !`))
+		else console.log(chalk.bold(`Le fichier a été installé avec succès !`))
+
+		// Sortir de la fonction
+		return
+	}
+
 	// Si auucn modules, afficher une erreur
-	if(!moduleNames) return console.log(chalk.red('Veuillez entrer un nom de module, exemple : ') + chalk.red.bold('betterpip uninstall NomDuModule'))
+	if(!moduleNames.length) return console.log(chalk.red('Veuillez entrer un nom de module, exemple : ') + chalk.red.bold('betterpip uninstall NomDuModule'))
 
 	// Pour chaque module dans l'array
 	for(var moduleName of moduleNames){
@@ -394,7 +515,7 @@ async function uninstallModule(moduleName){
 		// Utiliser Pip pour désinstaller le module
 		var uninstall;
 		try {
-			uninstall = require('child_process').execFileSync(`pip`, ['uninstall', moduleName, '-y'], { stdio: 'inherit', cwd: path.resolve(process.cwd()) })
+			uninstall = require('child_process').execFileSync(pipCommand, ['uninstall', moduleName, '-y'], { stdio: 'inherit', cwd: path.resolve(process.cwd()) })
 		} catch(e){
 			uninstall = 'failed'
 		}
@@ -405,7 +526,7 @@ async function uninstallModule(moduleName){
 
 		// Supprimer du python-package.json
 		var pythonPackage;
-		try { pythonPackage = require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
+		try { pythonPackage = _require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
 		if(pythonPackage.dependencies) delete pythonPackage.dependencies[moduleName]
 		fs.writeFileSync(path.join(process.cwd(), 'python-package.json'), JSON.stringify(pythonPackage, null, 2))
 	}
@@ -415,7 +536,7 @@ async function uninstallModule(moduleName){
 async function linkGlobalCommand(){
 	// Obtenir le package
 	var pythonPackage;
-	try { pythonPackage = require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
+	try { pythonPackage = _require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
 
 	// Si aucun élément dans le package
 	if(!Object.keys(pythonPackage).length) return console.log(chalk.red('Impossible de trouver un fichier python-package.json lisible dans le dossier actuelle.'))
@@ -446,7 +567,7 @@ async function linkGlobalCommand(){
 			console.log(chalk.red(`La commande ${chalk.bold(command)} existe déjà sur le système.`))
 
 			// Demander si on veut la remplacer
-			var replace = await inquirer.prompt([{
+			if(!process.env.BETTERPIP_SILENT_OUTPUT) var replace = await inquirer.prompt([{
 				type: 'confirm',
 				name: 'replace',
 				message: `Voulez-vous la remplacer ?`,
@@ -454,7 +575,7 @@ async function linkGlobalCommand(){
 			}])
 
 			// Si on ne veut pas la remplacer, l'enlever de l'array
-			if(!replace.replace) pythonPackage.globalCommands = pythonPackage.globalCommands.filter(c => c != command)
+			if(!replace?.replace && !process.env.BETTERPIP_SILENT_OUTPUT) pythonPackage.globalCommands = pythonPackage.globalCommands.filter(c => c != command)
 		}
 	}
 
@@ -462,16 +583,18 @@ async function linkGlobalCommand(){
 	if(!pythonPackage.globalCommands.length) return console.log(chalk.red(`Vous avez refusé l'installation ${pythonPackage?.globalCommands?.length > 1 ? 'des commandes' : 'de la commande'}.`))
 
 	// Demander confirmation avant d'installer toute les commandes
-	console.log(`${pythonPackage?.globalCommands?.length > 1 ? 'Les commandes suivantes seront' : 'La commande suivante sera'} installé sur votre appareil: ${chalk.bold(pythonPackage.globalCommands.join(', '))}`)
-	var confirm = await inquirer.prompt([{
-		type: 'confirm',
-		name: 'confirm',
-		message: 'Êtes-vous sûr ?',
-		default: false
-	}])
+	if(!process.env.BETTERPIP_SILENT_OUTPUT){
+		console.log(`${pythonPackage?.globalCommands?.length > 1 ? 'Les commandes suivantes seront' : 'La commande suivante sera'} installé sur votre appareil: ${chalk.bold(pythonPackage.globalCommands.join(', '))}`)
+		var confirm = await inquirer.prompt([{
+			type: 'confirm',
+			name: 'confirm',
+			message: 'Êtes-vous sûr ?',
+			default: false
+		}])
 
-	// Si on refuse ou qu'il n'y a aucune commande à installer
-	if(!confirm.confirm || !pythonPackage.globalCommands.length) return console.log(chalk.red(`Vous avez refusé l'installation ${pythonPackage?.globalCommands?.length > 1 ? 'des commandes' : 'de la commande'}.`))
+		// Si on refuse ou qu'il n'y a aucune commande à installer
+		if(!confirm?.confirm || !pythonPackage.globalCommands.length) return console.log(chalk.red(`Vous avez refusé l'installation ${pythonPackage?.globalCommands?.length > 1 ? 'des commandes' : 'de la commande'}.`))
+	}
 
 	// Afficher un spinner
 	spinner.text = "Début de l'installation"
@@ -500,7 +623,7 @@ async function unlinkGlobalCommand(){
 	else {
 		// Obtenir le package
 		var pythonPackage;
-		try { pythonPackage = require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
+		try { pythonPackage = _require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
 
 		// Si aucun élément dans le package
 		if(!Object.keys(pythonPackage).length) return console.log(chalk.red('Impossible de trouver un fichier python-package.json lisible dans le dossier actuelle.'))
@@ -521,16 +644,18 @@ async function unlinkGlobalCommand(){
 	}
 
 	// Demander confirmation avant de supprimer toute les commandes
-	console.log(`${commands?.length > 1 ? 'Les commandes suivantes seront supprimées' : 'La commande suivante sera supprimée'} de votre appareil: ${chalk.bold(commands.join(', '))}`)
-	var confirm = await inquirer.prompt([{
-		type: 'confirm',
-		name: 'confirm',
-		message: 'Êtes-vous sûr ?',
-		default: false
-	}])
+	if(!process.env.BETTERPIP_SILENT_OUTPUT){
+		console.log(`${commands?.length > 1 ? 'Les commandes suivantes seront supprimées' : 'La commande suivante sera supprimée'} de votre appareil: ${chalk.bold(commands.join(', '))}`)
+		var confirm = await inquirer.prompt([{
+			type: 'confirm',
+			name: 'confirm',
+			message: 'Êtes-vous sûr ?',
+			default: false
+		}])
 
-	// Si on refuse ou qu'il n'y a aucune commande à supprimer
-	if(!confirm.confirm || !commands.length) return console.log(chalk.red(`Vous avez refusé la suppression ${commands?.length > 1 ? 'des commandes' : 'de la commande'}.`))
+		// Si on refuse ou qu'il n'y a aucune commande à supprimer
+		if(!confirm?.confirm || !commands.length) return console.log(chalk.red(`Vous avez refusé la suppression ${commands?.length > 1 ? 'des commandes' : 'de la commande'}.`))
+	}
 
 	// Afficher un spinner
 	spinner.text = "Début de la suppression"
@@ -588,7 +713,7 @@ async function doCheck(){
 
 	// Vérifier si pip est installé sur le système
 	try {
-		var check = child_process.execSync('pip --version', { stdio: 'pipe' })
+		var check = child_process.execSync(`${pipCommand} --version`, { stdio: 'pipe' })
 		elements.push({ name: 'Pip', value: true, version: check.toString().split(' ')[1] || 'N/A' })
 	} catch(err){ elements.push({ name: 'Pip', value: false, version: 'N/A' }) }
 
@@ -668,21 +793,12 @@ async function doCheck(){
 
 // Fonction pour lancer le fichier principale
 async function startMainFile(){
-	// Obtenir la version principale de Python
-	var pythonCommand = await getPythonVersion()
-
 	// Obtenir le package
 	var pythonPackage;
-	try { pythonPackage = require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
+	try { pythonPackage = _require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
 
 	// Si aucun élément dans le package
 	if(!Object.keys(pythonPackage).length) return console.log(chalk.red('Impossible de trouver un fichier python-package.json lisible dans le dossier actuelle.'))
-
-	// Si aucune commande globale dans le package
-	if(!pythonPackage?.globalCommands?.length) return console.log(chalk.red('Aucune commande globale n\'a été définie dans le fichier python-package.json.'))
-
-	// Si les commandes globales n'est pas un array
-	if(!Array.isArray(pythonPackage.globalCommands)) return console.log(chalk.red('Les commandes globales ne sont pas valide dans le python-package.json.'))
 
 	// Si il manque le chemin du fichier principale
 	if(!pythonPackage.mainFile) return console.log(chalk.red('Le fichier principal n\'a pas été défini dans le python-package.json.'))
@@ -691,14 +807,14 @@ async function startMainFile(){
 	if(!fs.existsSync(path.join(process.cwd(), pythonPackage.mainFile))) return console.log(chalk.red('Le fichier principal n\'existe pas.'))
 
 	// Lancer le fichier principal
-	try { require('child_process').execFileSync(pythonCommand, [pythonPackage.mainFile], { stdio: 'inherit', cwd: path.resolve(process.cwd()) }) } catch(err){}
+	try { require('child_process').execFileSync(await getPythonVersion(), [pythonPackage.mainFile], { stdio: 'inherit', cwd: path.resolve(process.cwd()) }) } catch(err){}
 }
 
 // Fonction pour crée un script d'installation
 async function buildInstallationScript(){
 	// Obtenir le fichier python-package.json
 	var pythonPackage;
-	try { pythonPackage = require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
+	try { pythonPackage = _require(path.join(process.cwd(), 'python-package.json')) } catch(err){ pythonPackage = {} }
 	if(!Object.keys(pythonPackage).length) return console.log(chalk.red('Impossible de trouver un fichier python-package.json lisible dans le dossier actuelle.'))
 
 	// Si aucun nom dans le python-package.json
@@ -720,8 +836,8 @@ async function buildInstallationScript(){
 				[owner, repo] = value?.replace('https://github.com/','')?.replace('http://github.com/','')?.split('/')
 
 				// Si aucun nom de créateur/nom de répertoire
-				if(!owner) return chalk.red(`Aucun nom de créateur n'a été défini. Pour installer un CLI depuis GitHub, utiliser la commande comme ceci : `) + chalk.red.bold(`betterpip install --github ${chalk.underline('CréateurDuRepo')}/NomDuRepo`)
-				if(!repo) return chalk.red(`Aucun nom de répertoire n'a été défini. Pour installer un CLI depuis GitHub, utiliser la commande comme ceci : `) + chalk.red.bold(`betterpip install --github CréateurDuRepo/${chalk.underline('NomDuRepo')}`)
+				if(!owner) return chalk.red(`Aucun nom de créateur n'a été défini.`)
+				if(!repo) return chalk.red(`Aucun nom de répertoire n'a été défini.`)
 
 				// Sinon niquel
 				return true
@@ -787,12 +903,12 @@ async function showModuleInfo(moduleName){
 	if(!moduleName) return console.log(chalk.red('Veuillez entrer un nom de module, exemple : ') + chalk.red.bold('betterpip info NomDuModule'))
 
 	// Afficher les informations
-	try { require('child_process').execFileSync('pip', ['show', moduleName], { stdio: 'inherit', cwd: path.resolve(process.cwd()) }) } catch(err){}
+	try { require('child_process').execFileSync(pipCommand, ['show', moduleName], { stdio: 'inherit', cwd: path.resolve(process.cwd()) }) } catch(err){}
 }
 
 // Fonction pour afficher la liste des modules installé
 async function listModules(){
-	try { require('child_process').execFileSync('pip', ['list'], { stdio: 'inherit', cwd: path.resolve(process.cwd()) }) } catch(err){}
+	try { require('child_process').execFileSync(pipCommand, ['list'], { stdio: 'inherit', cwd: path.resolve(process.cwd()) }) } catch(err){}
 }
 
 // Fonction pour afficher la page d'aide
@@ -804,7 +920,7 @@ function showHelp(){
 
  Sous commandes :
    init             createPackage        Assistant pour générer un fichier python-package.json
-   install          i                    Permet d'installer un module
+   install          add                  Permet d'installer un module
    uninstall        remove               Désinstalle un module
    check            doctor               Vérifie certains éléments de BetterPip
    info             show                 Affiche des information sur un module
@@ -812,7 +928,7 @@ function showHelp(){
    build                                 Permet de générer un script d'installation pour votre module
    link                                  Permet d'associer les commandes globales du python-package.json au système
    unlink                                Supprime une/les commandes globales du système
-   start                                 Lance le fichier principale à partir du python-package.json
+   start            run                  Lance le fichier principale à partir du python-package.json
    help                                  Affiche cette page d'aide
    version          v                    Affiche la version de BetterPip
 
@@ -829,7 +945,7 @@ function showHelp(){
 
 // Gérer les arguments
 	// Install
-	if(process.argv[2] == 'install' || process.argv[2] == 'i'){
+	if(process.argv[2] == 'install' || process.argv[2] == 'i'|| process.argv[2] == 'add'){
 		// Si les arguments contiennent "-g", "--global" ou "--github"
 		if(process.argv.includes('-g') || process.argv.includes('--global') || process.argv.includes('--github')) installCliFromGithub()
 
@@ -853,7 +969,7 @@ function showHelp(){
 	// Build
 	else if(process.argv[2] == 'build') buildInstallationScript()
 	// Start
-	else if(process.argv[2] == 'start') startMainFile()
+	else if(process.argv[2] == 'start' || process.argv[2] == 'run') startMainFile()
 	// Version
 	else if(process.argv[2] == 'version' || process.argv[2] == '-v') console.log(require('./package.json').version)
 	// Help
