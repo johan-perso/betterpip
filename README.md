@@ -41,4 +41,4 @@ Le wiki est disponible [ici](https://github.com/johan-perso/betterpip/wiki).
 
 ## Licence
 
-MIT © [Johan](https://johanstickman.com)
+MIT © [Johan](https://johanstick.me)
