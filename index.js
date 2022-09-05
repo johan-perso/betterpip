@@ -883,7 +883,7 @@ async function buildInstallationScript(){
 
 	// Script pour Linux
 	function build_linux(){
-		fs.writeFileSync(path.join(process.cwd(), 'build', 'unix_install.sh'), `#!/usr/bin/env bash\n##########################################\n### Généré par BetterPip               ###\n### github.com/johan-perso/betterpip   ###\n### johanstickman.com                  ###\n##########################################\n\n# Si la commande betterpip est installé sur le système, l'utiliser pour installer le script\nif hash betterpip 2>/dev/null; then\n	betterpip install -g ${owner}/${repo}\n# Sinon, installer avec pip et git (installation manuelle)\nelse\n	git clone ${checkIfRepoExist.clone_url}\n	cd ${repo}\n	${pythonPackage.dependencies && Object.keys(pythonPackage.dependencies)?.length > 0 ? `pip install ${Object.keys(pythonPackage.dependencies).map(dependency => `${dependency}${pythonPackage.dependencies[dependency] == '*' ? '' : `==${pythonPackage.dependencies[dependency]}`}`).join(' ')}` : ''}\n	echo -e "\\nInstallateur généré avec BetterPip.\\nPour une meilleur installation: github.com/johan-perso/betterpip"\nfi`)
+		fs.writeFileSync(path.join(process.cwd(), 'build', 'unix_install.sh'), `#!/usr/bin/env bash\n##########################################\n### Généré par BetterPip               ###\n### github.com/johan-perso/betterpip   ###\n### johanstick.me                  ###\n##########################################\n\n# Si la commande betterpip est installé sur le système, l'utiliser pour installer le script\nif hash betterpip 2>/dev/null; then\n	betterpip install -g ${owner}/${repo}\n# Sinon, installer avec pip et git (installation manuelle)\nelse\n	git clone ${checkIfRepoExist.clone_url}\n	cd ${repo}\n	${pythonPackage.dependencies && Object.keys(pythonPackage.dependencies)?.length > 0 ? `pip install ${Object.keys(pythonPackage.dependencies).map(dependency => `${dependency}${pythonPackage.dependencies[dependency] == '*' ? '' : `==${pythonPackage.dependencies[dependency]}`}`).join(' ')}` : ''}\n	echo -e "\\nInstallateur généré avec BetterPip.\\nPour une meilleur installation: github.com/johan-perso/betterpip"\nfi`)
 	}
 
 	// Générer tout les scripts
@@ -933,9 +933,9 @@ function showHelp(){
    version          v                    Affiche la version de BetterPip
 
  Créateur :
-   🌐 ${chalk.cyan(`https://${chalk.bold('johanstickman.com')}`)}
+   🌐 ${chalk.cyan(`https://${chalk.bold('johanstick.me')}`)}
    🐦 ${chalk.cyan(`https://${chalk.bold('twitter.com/Johan_Stickman')}`)}
-   ❔ ${chalk.cyan(`https://${chalk.bold('contact.johanstickman.com')}`)}
+   ❔ ${chalk.cyan(`https://${chalk.bold('contact.johanstick.me')}`)}
 
  À propos :
    ${chalk.cyan(`https://github.com/${chalk.bold('johan-perso/betterpip')}`)}
